@@ -1,11 +1,12 @@
 import csv
 import io
+import json
+import logging
 import os
+import sqlite3
 from functools import wraps
-from pathlib import Path
 
 import joblib
-import mysql.connector
 import numpy as np
 from flask import (
     Flask,
@@ -21,120 +22,61 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from config import cfg
+from gemini_client import call_gemini
 
 
 app = Flask(__name__)
 app.secret_key = cfg.SECRET_KEY
 
-
 _DB_INIT_DONE = False
 
 
-def get_db_connection():
-    host = cfg.MYSQL_HOST
-    user = cfg.MYSQL_USER
-    password = cfg.MYSQL_PASSWORD
-    db_name = cfg.MYSQL_DATABASE
-
-    try:
-        return mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=db_name,
-            autocommit=False,
-        )
-    except mysql.connector.Error as e:
-        # Unknown database -> create it and reconnect.
-        if getattr(e, "errno", None) == 1049:
-            admin_conn = mysql.connector.connect(
-                host=host, user=user, password=password, autocommit=True
-            )
-            cur = admin_conn.cursor()
-            cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}`")
-            cur.close()
-            admin_conn.close()
-            return mysql.connector.connect(
-                host=host,
-                user=user,
-                password=password,
-                database=db_name,
-                autocommit=False,
-            )
-        raise
+def get_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(cfg.SQLITE_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def ensure_schema():
     """
-    Auto-create DB tables to make the project copy-run easier.
-    You can disable via env AUTO_INIT_DB=0.
+    Auto-create SQLite tables so you can run the project immediately.
     """
     global _DB_INIT_DONE
     if _DB_INIT_DONE:
         return
 
-    if os.environ.get("AUTO_INIT_DB", "1") != "1":
-        _DB_INIT_DONE = True
-        return
-
     conn = get_db_connection()
     cur = conn.cursor()
 
+    # users
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          username VARCHAR(100) NOT NULL UNIQUE,
-          password_hash VARCHAR(255) NOT NULL,
-          role VARCHAR(20) NOT NULL DEFAULT 'user',
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
 
-    # Nếu DB đã tồn tại từ lần chạy trước (schema cũ), MySQL sẽ không tự thêm cột mới.
-    # Ví dụ: users thiếu cột `role` -> đăng ký sẽ lỗi.
-    cur.execute(
-        """
-        SELECT COUNT(*) AS cnt
-        FROM information_schema.columns
-        WHERE table_schema=%s AND table_name='users' AND column_name='role'
-        """,
-        (cfg.MYSQL_DATABASE,),
-    )
-    row = cur.fetchone()
-    if row and int(row[0]) == 0:
-        cur.execute("ALTER TABLE users ADD role VARCHAR(20) NOT NULL DEFAULT 'user'")
-
+    # predictions
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS predictions (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          pregnancies INT,
-          glucose FLOAT,
-          blood_pressure FLOAT,
-          bmi FLOAT,
-          age INT,
-          result VARCHAR(10),
-          probability FLOAT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pregnancies INTEGER,
+            glucose REAL,
+            blood_pressure REAL,
+            bmi REAL,
+            age INTEGER,
+            result TEXT,
+            probability REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
-
-    # Một số lần bạn đã có table predictions cũ nên có thể thiếu cột.
-    # Add cột probability nếu chưa có.
-    cur.execute(
-        """
-        SELECT COUNT(*) AS cnt
-        FROM information_schema.columns
-        WHERE table_schema=%s AND table_name='predictions' AND column_name='probability'
-        """,
-        (cfg.MYSQL_DATABASE,),
-    )
-    row = cur.fetchone()
-    if row and int(row[0]) == 0:
-        cur.execute("ALTER TABLE predictions ADD probability FLOAT DEFAULT 0")
 
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_predictions_created_at ON predictions(created_at)"
@@ -146,7 +88,6 @@ def ensure_schema():
     conn.commit()
     cur.close()
     conn.close()
-
     _DB_INIT_DONE = True
 
 
@@ -155,7 +96,7 @@ def _bootstrap():
     try:
         ensure_schema()
     except Exception:
-        # Don't crash due to schema init if DB isn't ready; real failures happen on query.
+        # If DB isn't ready, real requests will still fail on queries.
         pass
 
 
@@ -179,21 +120,6 @@ def login_required_api(fn):
     return wrapper
 
 
-def role_required(role_name: str):
-    def decorator(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            if "user_id" not in session:
-                return jsonify({"error": "Unauthorized"}), 401
-            if session.get("role") != role_name:
-                return jsonify({"error": "Forbidden"}), 403
-            return fn(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-
 def init_admin_if_needed():
     admin_username = os.environ.get("ADMIN_USERNAME")
     admin_password = os.environ.get("ADMIN_PASSWORD")
@@ -201,23 +127,23 @@ def init_admin_if_needed():
         return
 
     conn = get_db_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT id FROM users WHERE username=%s", (admin_username,))
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE username=?", (admin_username,))
     row = cur.fetchone()
     if row is None:
         cur.execute(
-            "INSERT INTO users(username, password_hash, role) VALUES (%s, %s, %s)",
+            "INSERT INTO users(username, password_hash, role) VALUES (?,?,?)",
             (admin_username, generate_password_hash(admin_password), "admin"),
         )
         conn.commit()
         print("[info] Auto-created admin user from env.")
+
     cur.close()
     conn.close()
 
 
 @app.before_request
 def _init_admin():
-    # Cheap check; keeps admin demo user available.
     try:
         init_admin_if_needed()
     except Exception:
@@ -240,8 +166,6 @@ def _load_ml_artifacts():
 
         meta_path = cfg.MODEL_DIR / "metadata.json"
         if meta_path.exists():
-            import json
-
             METADATA = json.loads(meta_path.read_text(encoding="utf-8"))
     except Exception as e:
         print("[warning] Failed to load ML artifacts:", e)
@@ -251,7 +175,6 @@ _load_ml_artifacts()
 
 
 def parse_float(value):
-    # Accept int/float/strings; return None if invalid.
     try:
         if value is None:
             return None
@@ -263,10 +186,6 @@ def parse_float(value):
 
 
 def validate_features(input_dict):
-    """
-    Validate non-null, non-negative, and range checks.
-    Returns: (features_dict, errors_list)
-    """
     if not isinstance(input_dict, dict):
         return None, ["Invalid input: expected a JSON object or form fields."]
 
@@ -302,9 +221,8 @@ def _positive_proba(model, x):
         classes = list(getattr(model, "classes_", [0, 1]))
         if 1 in classes:
             return float(proba_all[classes.index(1)])
-        # fallback
         return float(proba_all[-1])
-    # fallback: map class to probability-ish (not calibrated)
+
     pred = model.predict(x)[0]
     return 1.0 if int(pred) == 1 else 0.0
 
@@ -321,9 +239,7 @@ def predict_proba(features: dict):
             raise RuntimeError("Scaler not loaded but expects_scaled=True.")
         x = SCALER.transform(x)
 
-    # If metadata is missing, try best-effort:
     if METADATA == {} and SCALER is not None:
-        # If model is logistic, it should benefit from scaling.
         try:
             x_scaled = SCALER.transform(x)
             return _positive_proba(MODEL, x_scaled)
@@ -334,11 +250,6 @@ def predict_proba(features: dict):
 
 
 def risk_from_probability(probability_01: float):
-    """
-    probability_01 in [0,1]
-    Risk based on probability percentage:
-      <30 Low, 30-70 Medium, >70 High
-    """
     p_percent = probability_01 * 100.0
     low_t, high_t = cfg.RISK_THRESHOLDS
     if p_percent < low_t:
@@ -353,9 +264,6 @@ def result_label(probability_01: float):
 
 
 def _feature_bucket(value: float, feature_name: str):
-    """
-    Bucket hóa cho mục đích giải thích (heuristic), KHÔNG ảnh hưởng dự đoán.
-    """
     lo, hi = cfg.RANGES[feature_name]
     if hi <= lo:
         return "trung binh"
@@ -368,20 +276,15 @@ def _feature_bucket(value: float, feature_name: str):
 
 
 def get_model_feature_scores():
-    """
-    Score per feature để chọn "top factors" giải thích.
-    """
     if MODEL is None:
         return [0.0 for _ in cfg.FEATURES]
 
-    # RandomForestClassifier
     if hasattr(MODEL, "feature_importances_"):
         scores = list(getattr(MODEL, "feature_importances_"))
         if len(scores) != len(cfg.FEATURES):
             return [0.0 for _ in cfg.FEATURES]
         return [float(x) for x in scores]
 
-    # LogisticRegression
     if hasattr(MODEL, "coef_"):
         coef = np.array(getattr(MODEL, "coef_")).reshape(-1)
         if coef.shape[0] != len(cfg.FEATURES):
@@ -392,18 +295,15 @@ def get_model_feature_scores():
 
 
 def top_factors_from_inputs(features: dict, top_n: int = 3):
-    """
-    Chọn top_n feature nổi bật theo score của model (nếu có),
-    kèm bucket heuristic dựa trên range cấu hình để mô tả bằng lời.
-    """
     scores = get_model_feature_scores()
     ranked = sorted(range(len(cfg.FEATURES)), key=lambda i: scores[i], reverse=True)
 
-    # fallback: nếu score đều 0, dùng lệch khỏi trung tâm range
     if all(s == 0.0 for s in scores):
         ranked = sorted(
             range(len(cfg.FEATURES)),
-            key=lambda i: abs(features[cfg.FEATURES[i]] - (sum(cfg.RANGES[cfg.FEATURES[i]]) / 2.0)),
+            key=lambda i: abs(
+                features[cfg.FEATURES[i]] - (sum(cfg.RANGES[cfg.FEATURES[i]]) / 2.0)
+            ),
             reverse=True,
         )
 
@@ -415,7 +315,7 @@ def top_factors_from_inputs(features: dict, top_n: int = 3):
         fname = cfg.FEATURES[idx]
         val = float(features[fname])
         lo, hi = cfg.RANGES[fname]
-        bucket_en = _feature_bucket(val, fname)  # thap/trung binh/cao
+        bucket_en = _feature_bucket(val, fname)
         out.append(
             {
                 "feature": fname,
@@ -429,17 +329,13 @@ def top_factors_from_inputs(features: dict, top_n: int = 3):
 
 
 def build_causes(features: dict, risk: str, top_n: int = 3):
-    """
-    Sinh danh sách nguyên nhân/điểm nổi bật (text) cho UI.
-    Heuristic dựa trên input + top factors từ model, KHÔNG thay thế y khoa.
-    """
     relation = {
-        "Pregnancies": "liên quan đến thay đổi chuyển hóa trong thai kỳ và các yếu tố sức khỏe lâu dài",
+        "Pregnancies": "liên quan đến thay đổi chuyển hoá trong thai kỳ và các yếu tố sức khỏe lâu dài",
         "Glucose": "thường gắn với khả năng kiểm soát đường huyết/kháng insulin",
         "BloodPressure": "có thể đi kèm rối loạn chuyển hóa (hội chứng chuyển hóa)",
         "SkinThickness": "có thể phản ánh mức độ tích tụ mỡ dưới da",
         "Insulin": "có thể liên quan tới kháng insulin và chức năng tiết insulin",
-        "BMI": "phản ánh thừa cân/béo phì, thường làm tăng nguy cơ rối loạn chuyển hóa",
+        "BMI": "phản ánh thừa cân/béo phì, thường làm tăng nguy cơ rối loạn chuyển hoá",
         "DiabetesPedigreeFunction": "phản ánh yếu tố di truyền/tiền sử gia đình",
         "Age": "tuổi càng cao thì nguy cơ thường tăng",
     }
@@ -465,18 +361,19 @@ def build_causes(features: dict, risk: str, top_n: int = 3):
         )
 
     if risk == "High":
-        causes.append("Tổng hợp các chỉ số nổi bật tạo ra xác suất rủi ro cao trong mô hình.")
+        causes.append("Tổng hợp các chỉ số nổi bật làm mô hình dự đoán nguy cơ cao hơn.")
     elif risk == "Medium":
-        causes.append("Một số chỉ số nổi bật làm tăng rủi ro ở mức trung bình trong mô hình.")
+        causes.append("Một số chỉ số nổi bật làm mô hình dự đoán nguy cơ ở mức trung bình.")
     else:
-        causes.append("Các chỉ số nổi bật không cho thấy rủi ro cao trong mô hình.")
+        causes.append("Các chỉ số nổi bật nhìn chung không cho thấy rủi ro cao trong mô hình.")
+
     return causes
 
 
 def build_recommendations(risk: str):
     if risk == "High":
         return [
-            "Nên ưu tiên đi khám/chẩn đoán và trao đổi với bác sĩ về các xét nghiệm phù hợp (ví dụ HbA1c/đường huyết).",
+            "Nên ưu tiên đi khám/chẩn đoán và trao đổi xét nghiệm phù hợp (ví dụ HbA1c/đường huyết).",
             "Ưu tiên thay đổi lối sống: giảm đường tinh luyện, giảm đồ chế biến sẵn, tăng vận động và duy trì cân nặng hợp lý.",
             "Lên lịch theo dõi định kỳ theo hướng dẫn chuyên môn.",
             "Kết quả dự đoán chỉ mang tính tham khảo, không thay thế chẩn đoán y khoa.",
@@ -484,12 +381,12 @@ def build_recommendations(risk: str):
     if risk == "Medium":
         return [
             "Điều chỉnh chế độ ăn và tăng vận động để giảm nguy cơ.",
-            "Theo dõi đường huyết/xét nghiệm theo lịch, đặc biệt nếu chỉ số thực tế đang cao.",
-            "Nếu BMI/BP/đường huyết đang cao, cân nhắc can thiệp sớm hơn.",
+            "Theo dõi đường huyết/xét nghiệm theo lịch; cân nhắc can thiệp sớm hơn nếu chỉ số đang cao.",
+            "Giữ thói quen sinh hoạt lành mạnh để cải thiện lâu dài.",
             "Kết quả dự đoán chỉ mang tính tham khảo.",
         ]
     return [
-        "Duy trì lối sống lành mạnh: ăn cân bằng, hạn chế đường tinh luyện, tăng chất xơ và duy trì vận động.",
+        "Duy trì lối sống lành mạnh: ăn cân bằng, hạn chế đường tinh chế, tăng chất xơ và vận động.",
         "Theo dõi sức khỏe định kỳ để phát hiện sớm thay đổi.",
         "Nếu có tiền sử gia đình hoặc triệu chứng, nên tư vấn bác sĩ để được cá nhân hóa.",
         "Kết quả dự đoán chỉ mang tính tham khảo.",
@@ -497,10 +394,8 @@ def build_recommendations(risk: str):
 
 
 def build_nutrition_tips(features: dict, risk: str):
-    """
-    Tips dinh dưỡng mức khái quát dựa trên các feature đầu vào (phù hợp dataset Pima).
-    """
     tips = []
+
     glucose = float(features["Glucose"])
     bmi = float(features["BMI"])
     bp = float(features["BloodPressure"])
@@ -511,7 +406,7 @@ def build_nutrition_tips(features: dict, risk: str):
         tips.append("Duy trì kiểm soát carb: hạn chế đồ ngọt; chọn carb giàu chất xơ (rau, ngũ cốc nguyên hạt).")
 
     if bmi >= 30:
-        tips.append("Nếu BMI cao: ưu tiên giảm cân bền vững (giảm năng lượng nạp + tăng vận động), ưu tiên đạm nạc và rau.")
+        tips.append("Nếu BMI cao: ưu tiên giảm cân bền vững; ưu tiên đạm nạc và rau, giảm năng lượng nạp phù hợp.")
     elif bmi >= 25:
         tips.append("Nếu BMI hơi cao: điều chỉnh khẩu phần để tránh tăng cân thêm, tăng hoạt động thể lực.")
     else:
@@ -533,7 +428,10 @@ def build_nutrition_tips(features: dict, risk: str):
 
 
 def build_disclaimer():
-    return "Lưu ý: nội dung giải thích/khuyến nghị dựa trên dữ liệu và mô hình (Pima Diabetes) + quy tắc tổng quát, chỉ dùng cho mục đích tham khảo demo; không thay thế tư vấn y khoa."
+    return (
+        "Lưu ý: nội dung giải thích/khuyến nghị dựa trên dữ liệu và mô hình (Pima Diabetes) + quy tắc tổng quát, "
+        "chỉ dùng cho mục đích tham khảo demo; không thay thế tư vấn y khoa."
+    )
 
 
 def store_prediction(features: dict, result: str, probability_01: float):
@@ -542,7 +440,7 @@ def store_prediction(features: dict, result: str, probability_01: float):
     cur.execute(
         """
         INSERT INTO predictions(pregnancies, glucose, blood_pressure, bmi, age, result, probability)
-        VALUES (%s,%s,%s,%s,%s,%s,%s)
+        VALUES (?,?,?,?,?,?,?)
         """,
         (
             int(features["Pregnancies"]),
@@ -563,12 +461,12 @@ def store_prediction(features: dict, result: str, probability_01: float):
 
 def get_dashboard_data():
     conn = get_db_connection()
-    cur = conn.cursor(dictionary=True)
+    cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) as total FROM predictions")
+    cur.execute("SELECT COUNT(*) AS total FROM predictions")
     total = int(cur.fetchone()["total"])
 
-    cur.execute("SELECT COUNT(*) as pos FROM predictions WHERE result='Positive'")
+    cur.execute("SELECT COUNT(*) AS pos FROM predictions WHERE result='Positive'")
     pos = int(cur.fetchone()["pos"])
 
     cur.execute(
@@ -579,13 +477,10 @@ def get_dashboard_data():
         LIMIT 10
         """
     )
-    recent = cur.fetchall()
+    recent = [dict(r) for r in cur.fetchall()]
 
     cur.execute("SELECT probability FROM predictions")
     probs = cur.fetchall()
-
-    cur.close()
-    conn.close()
 
     risk_counts = {"Low": 0, "Medium": 0, "High": 0}
     for row in probs:
@@ -594,6 +489,9 @@ def get_dashboard_data():
         risk_counts[risk] += 1
 
     positive_rate = (pos / total * 100.0) if total else 0.0
+
+    cur.close()
+    conn.close()
 
     return {
         "total": total,
@@ -604,6 +502,90 @@ def get_dashboard_data():
     }
 
 
+def maybe_call_gemini(
+    *,
+    features: dict,
+    risk: str,
+    probability: float,
+    result: str,
+    causes: list,
+    recommendations: list,
+    nutrition_tips: list,
+):
+    """
+    Optional: use Gemini to rewrite explanation/recommendations in Vietnamese.
+    If Gemini fails or isn't configured, return {}.
+    """
+    if not cfg.GEMINI_ENABLED or not cfg.GEMINI_API_KEY:
+        return {}
+
+    # Format input data for the prompt
+    causes_text = "\n".join(f"- {c}" for c in causes)
+    recommendations_text = "\n".join(f"- {r}" for r in recommendations)
+    nutrition_tips_text = "\n".join(f"- {t}" for t in nutrition_tips)
+    disclaimer_text = build_disclaimer()
+
+    # Refined prompt that encourages valid JSON output
+    prompt = f"""Bạn là một trợ lý y khoa cung cấp thông tin tham khảo. Hãy tổng hợp và viết lại nội dung giải thích dự đoán bệnh dựa trên dữ liệu sau.
+
+QUAN TRỌNG: Bạn PHẢI trả về kết quả là một JSON object hợp lệ với đúng 3 field: "explanation", "recommendations", "nutrition_tips". Mỗi field phải là string (cho "explanation") hoặc array của strings (cho recommendations/nutrition_tips).
+
+Dữ liệu đầu vào:
+- Kết quả dự đoán: {result}
+- Mức độ nguy cơ: {risk}
+- Xác suất: {probability:.2%}
+
+Các yếu tố chính (Causes):
+{causes_text}
+
+Khuyến nghị từ hệ thống:
+{recommendations_text}
+
+Lời khuyên dinh dưỡng:
+{nutrition_tips_text}
+
+Lưu ý quan trọng: {disclaimer_text}
+
+YÊU CẦU:
+1. Viết ngắn gọn, rõ ràng bằng tiếng Việt dễ hiểu cho bệnh nhân/demo.
+2. KHÔNG bịa đặt số liệu hoặc khẳng định chắc chắn thay bác sĩ.
+3. Dựa trên thông tin đã cho để viết lại/tổng hợp thành lời giải thích mạch lạc.
+4. Khuyến nghị có thể tương tự hoặc cải tiến từ danh sách sẵn có.
+5. Lời khuyên dinh dưỡng nên cụ thể và áp dụng được.
+6. PHẢI trả về kết quả dưới dạng JSON hợp lệ (không markdown, không text khác).
+
+Output format (phải là JSON hợp lệ):
+{{
+  "explanation": "Giải thích ngắn gọn về kết quả dự đoán...",
+  "recommendations": ["Khuyến nghị 1", "Khuyến nghị 2", "Khuyến nghị 3"],
+  "nutrition_tips": ["Lời khuyên 1", "Lời khuyên 2", "Lời khuyên 3"]
+}}"""
+
+    try:
+        resp = call_gemini(
+            api_key=cfg.GEMINI_API_KEY,
+            model=cfg.GEMINI_MODEL,
+            prompt=prompt,
+        )
+        
+        if not isinstance(resp, dict):
+            return {}
+        
+        # Ensure response has expected structure
+        if "explanation" not in resp:
+            resp["explanation"] = ""
+        if "recommendations" not in resp:
+            resp["recommendations"] = recommendations
+        if "nutrition_tips" not in resp:
+            resp["nutrition_tips"] = nutrition_tips
+            
+        return resp
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error in maybe_call_gemini: {e}", exc_info=True)
+        return {}
+
+
 # -------- Auth --------
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -612,8 +594,8 @@ def login():
         password = request.form.get("password") or ""
 
         conn = get_db_connection()
-        cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT * FROM users WHERE username=%s", (username,))
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE username=?", (username,))
         user = cur.fetchone()
         cur.close()
         conn.close()
@@ -626,6 +608,7 @@ def login():
             return redirect(url_for("dashboard"))
 
         flash("Invalid username/password.", "danger")
+
     return render_template("login.html")
 
 
@@ -643,17 +626,18 @@ def register():
         cur = conn.cursor()
         try:
             cur.execute(
-                "INSERT INTO users(username, password_hash, role) VALUES (%s,%s,'user')",
-                (username, generate_password_hash(password)),
+                "INSERT INTO users(username, password_hash, role) VALUES (?,?,?)",
+                (username, generate_password_hash(password), "user"),
             )
             conn.commit()
             flash("Register successful. Please login.", "success")
             return redirect(url_for("login"))
-        except mysql.connector.IntegrityError:
+        except sqlite3.IntegrityError:
             flash("Username already exists.", "danger")
         finally:
             cur.close()
             conn.close()
+
     return render_template("register.html")
 
 
@@ -674,10 +658,20 @@ def index():
 @app.route("/predict", methods=["POST"])
 @login_required_web
 def predict():
+    # Detect JSON
     is_json = request.is_json or request.content_type == "application/json"
+    if is_json:
+        payload = request.get_json(silent=True)
+    else:
+        payload = request.form.to_dict()
+
+    if is_json and payload is None:
+        return (
+            jsonify({"error": "Invalid JSON body. Expected JSON object."}),
+            400,
+        )
 
     try:
-        payload = request.get_json(silent=True) if is_json else request.form.to_dict()
         features, errors = validate_features(payload)
         if errors:
             if is_json:
@@ -690,10 +684,49 @@ def predict():
         risk, _p_percent = risk_from_probability(prob)
         res = result_label(prob)
         pred_id = store_prediction(features, res, prob)
+
         causes = build_causes(features, risk=risk, top_n=3)
         recommendations = build_recommendations(risk)
         nutrition_tips = build_nutrition_tips(features, risk)
         disclaimer = build_disclaimer()
+
+        gemini_explanation = ""
+        gemini_payload = maybe_call_gemini(
+            features=features,
+            risk=risk,
+            probability=prob,
+            result=res,
+            causes=causes,
+            recommendations=recommendations,
+            nutrition_tips=nutrition_tips,
+        )
+        
+        if gemini_payload:
+            # Extract explanation (prioritize Gemini's explanation if provided)
+            gemini_explanation = gemini_payload.get("explanation", "") or ""
+            
+            # If Gemini couldn't match the expected JSON schema, show a helpful fallback
+            if (not gemini_explanation) and gemini_payload.get("raw_text"):
+                raw = str(gemini_payload.get("raw_text", ""))
+                gemini_explanation = (
+                    "Gemini trả về nội dung nhưng không parse được theo JSON schema đúng. "
+                    f"Nội dung (rút gọn): {raw[:300]}"
+                )
+            
+            # Update recommendations if Gemini provided better ones
+            if isinstance(gemini_payload.get("recommendations"), list):
+                recommendations = [str(r) for r in gemini_payload["recommendations"]]
+            
+            # Update nutrition tips if Gemini provided better ones
+            if isinstance(gemini_payload.get("nutrition_tips"), list):
+                nutrition_tips = [str(t) for t in gemini_payload["nutrition_tips"]]
+        else:
+            # Gemini enabled but failed -> show a helpful message for demo/debug
+            if cfg.GEMINI_ENABLED and cfg.GEMINI_API_KEY:
+                gemini_explanation = (
+                    "Gemini chưa trả được kết quả phù hợp. Hệ thống vẫn dùng phần "
+                    "giải thích/khuyến nghị theo rule-based."
+                )
 
         if is_json:
             return (
@@ -706,6 +739,7 @@ def predict():
                         "recommendations": recommendations,
                         "nutrition_tips": nutrition_tips,
                         "disclaimer": disclaimer,
+                        "gemini_explanation": gemini_explanation,
                     }
                 ),
                 200,
@@ -722,8 +756,8 @@ def predict():
             recommendations=recommendations,
             nutrition_tips=nutrition_tips,
             disclaimer=disclaimer,
+            gemini_explanation=gemini_explanation,
         )
-
     except Exception as e:
         if is_json:
             return jsonify({"error": "Server error", "details": str(e)}), 500
@@ -741,8 +775,7 @@ def dashboard():
 @login_required_api
 def dashboard_data():
     try:
-        data = get_dashboard_data()
-        return jsonify(data)
+        return jsonify(get_dashboard_data())
     except Exception as e:
         return jsonify({"error": "Server error", "details": str(e)}), 500
 
@@ -755,14 +788,15 @@ def export_csv():
         return redirect(url_for("dashboard"))
 
     conn = get_db_connection()
-    cur = conn.cursor(dictionary=True)
+    cur = conn.cursor()
     cur.execute(
         """
         SELECT id, pregnancies, glucose, blood_pressure, bmi, age, result, probability, created_at
-        FROM predictions ORDER BY id DESC
+        FROM predictions
+        ORDER BY id DESC
         """
     )
-    rows = cur.fetchall()
+    rows = [dict(r) for r in cur.fetchall()]
     cur.close()
     conn.close()
 
@@ -798,350 +832,12 @@ def export_csv():
 
     resp = make_response(output.getvalue())
     resp.headers["Content-Type"] = "text/csv; charset=utf-8"
-    resp.headers["Content-Disposition"] = 'attachment; filename="predictions_history.csv"'
+    resp.headers[
+        "Content-Disposition"
+    ] = 'attachment; filename="predictions_history.csv"'
     return resp
 
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5000")), debug=True)
 
-import os
-from functools import wraps
-from pathlib import Path
-
-import mysql.connector
-from flask import (
-    Flask,
-    flash,
-    jsonify,
-    redirect,
-    render_template,
-    request,
-    session,
-    url_for,
-)
-from werkzeug.security import check_password_hash, generate_password_hash
-
-try:
-    import joblib  # type: ignore
-except Exception:  # pragma: no cover
-    joblib = None
-
-app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
-
-
-def get_db():
-    # Defaults giữ nguyên như project bạn đang dùng (root, password rỗng).
-    host = os.environ.get("MYSQL_HOST", "localhost")
-    user = os.environ.get("MYSQL_USER", "root")
-    password = os.environ.get("MYSQL_PASSWORD", "")
-    db_name = os.environ.get("MYSQL_DATABASE", "disease_db")
-
-    try:
-        return mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=db_name,
-        )
-    except mysql.connector.Error as e:
-        # Nếu DB chưa tồn tại, tạo DB để app chạy ngay.
-        # MySQL error code 1049: Unknown database
-        if getattr(e, "errno", None) == 1049:
-            conn = mysql.connector.connect(host=host, user=user, password=password)
-            cur = conn.cursor()
-            cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}`")
-            cur.close()
-            conn.close()
-            return mysql.connector.connect(
-                host=host,
-                user=user,
-                password=password,
-                database=db_name,
-            )
-        raise
-
-
-def login_required(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if "user_id" not in session:
-            return redirect(url_for("login"))
-        return fn(*args, **kwargs)
-
-    return wrapper
-
-
-MODEL_PATH = Path(__file__).with_name("model.pkl")
-_model = None
-if joblib is not None and MODEL_PATH.exists():
-    try:
-        _model = joblib.load(str(MODEL_PATH))
-    except Exception:
-        _model = None
-
-
-def normalize_prediction(pred):
-    # Model thực tế có thể trả về:
-    # - 0/1 (int/float)
-    # - "High Risk"/"Low Risk" (str)
-    # - hoặc các nhãn khác
-    if isinstance(pred, (int, float)):
-        return "High Risk" if float(pred) >= 0.5 else "Low Risk"
-    s = str(pred).strip().lower()
-    if "high" in s or s in {"1", "true", "high_risk"}:
-        return "High Risk"
-    if "low" in s or s in {"0", "false", "low_risk"}:
-        return "Low Risk"
-    return str(pred)
-
-
-def predict_risk(age, glucose, bp, bmi):
-    if _model is not None:
-        try:
-            pred = _model.predict([[age, glucose, bp, bmi]])[0]
-            return normalize_prediction(pred)
-        except Exception:
-            # Nếu model format input không khớp thì fallback để app vẫn chạy.
-            pass
-    # Fake logic fallback (như bản gốc).
-    return "High Risk" if float(glucose) > 140 else "Low Risk"
-
-
-def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-
-    # Patients (giúp chạy ngay kể cả khi bạn chưa chạy database.sql).
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS patients (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(100),
-            age INT,
-            glucose FLOAT,
-            blood_pressure FLOAT,
-            bmi FLOAT,
-            result VARCHAR(50)
-        );
-        """
-    )
-    conn.commit()
-
-    # Tạo table users để làm Login.
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(100) NOT NULL UNIQUE,
-            password_hash VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-    )
-    conn.commit()
-
-    # Auto-create admin để chạy ngay (demo).
-    auto_create = os.environ.get("AUTO_CREATE_ADMIN", "1") == "1"
-    if auto_create:
-        admin_user = os.environ.get("ADMIN_USERNAME", "admin")
-        admin_pass = os.environ.get("ADMIN_PASSWORD", "admin")
-        cur.execute("SELECT id FROM users WHERE username=%s", (admin_user,))
-        row = cur.fetchone()
-        if row is None:
-            cur.execute(
-                "INSERT INTO users(username, password_hash) VALUES (%s, %s)",
-                (admin_user, generate_password_hash(admin_pass)),
-            )
-            conn.commit()
-            print(
-                "[warning] Auto-created admin user. Change ADMIN_PASSWORD for production."
-            )
-    cur.close()
-    conn.close()
-
-_db_init_done = False
-
-
-@app.before_request
-def _bootstrap():
-    global _db_init_done
-    if _db_init_done:
-        return
-    try:
-        init_db()
-        _db_init_done = True
-    except Exception as e:
-        # Không chặn startup nếu DB chưa sẵn sàng (ví dụ bạn chưa chạy database.sql).
-        print(f"[warning] init_db failed: {e}")
-
-
-def parse_patient_form():
-    name = (request.form.get("name") or "").strip()
-    age = request.form.get("age")
-    glucose = request.form.get("glucose")
-    bp = request.form.get("bp")
-    bmi = request.form.get("bmi")
-
-    if not name:
-        raise ValueError("Tên không được để trống.")
-
-    age = int(age)
-    glucose = float(glucose)
-    bp = float(bp)
-    bmi = float(bmi)
-    return name, age, glucose, bp, bmi
-
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        password = request.form.get("password") or ""
-
-        conn = get_db()
-        cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT * FROM users WHERE username=%s", (username,))
-        user = cur.fetchone()
-        cur.close()
-        conn.close()
-
-        if user and check_password_hash(user["password_hash"], password):
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            flash("Đăng nhập thành công.", "success")
-            return redirect(url_for("index"))
-        flash("Sai tài khoản hoặc mật khẩu.", "danger")
-    return render_template("login.html")
-
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    flash("Đã đăng xuất.", "success")
-    return redirect(url_for("login"))
-
-
-@app.route("/")
-@login_required
-def index():
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM patients ORDER BY id DESC")
-    data = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return render_template(
-        "index.html", patients=data, username=session.get("username")
-    )
-
-
-@app.route("/add", methods=["POST"])
-@login_required
-def add():
-    try:
-        name, age, glucose, bp, bmi = parse_patient_form()
-    except Exception as e:
-        flash(str(e), "danger")
-        return redirect(url_for("index"))
-
-    result = predict_risk(age=age, glucose=glucose, bp=bp, bmi=bmi)
-
-    conn = get_db()
-    cursor = conn.cursor()
-    sql = """
-        INSERT INTO patients(name, age, glucose, blood_pressure, bmi, result)
-        VALUES (%s, %s, %s, %s, %s, %s)
-    """
-    cursor.execute(sql, (name, age, glucose, bp, bmi, result))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    flash("Đã thêm bệnh nhân.", "success")
-    return redirect(url_for("index"))
-
-
-@app.route("/edit/<int:id>", methods=["GET"])
-@login_required
-def edit(id):
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM patients WHERE id=%s", (id,))
-    patient = cursor.fetchone()
-    cursor.close()
-    conn.close()
-
-    if not patient:
-        flash("Không tìm thấy bệnh nhân.", "danger")
-        return redirect(url_for("index"))
-    return render_template(
-        "edit.html", patient=patient, username=session.get("username")
-    )
-
-
-@app.route("/update/<int:id>", methods=["POST"])
-@login_required
-def update(id):
-    try:
-        name, age, glucose, bp, bmi = parse_patient_form()
-    except Exception as e:
-        flash(str(e), "danger")
-        return redirect(url_for("edit", id=id))
-
-    result = predict_risk(age=age, glucose=glucose, bp=bp, bmi=bmi)
-
-    conn = get_db()
-    cursor = conn.cursor()
-    sql = """
-        UPDATE patients
-        SET name=%s, age=%s, glucose=%s, blood_pressure=%s, bmi=%s, result=%s
-        WHERE id=%s
-    """
-    cursor.execute(sql, (name, age, glucose, bp, bmi, result, id))
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-    flash("Đã cập nhật.", "success")
-    return redirect(url_for("index"))
-
-
-@app.route("/delete", methods=["POST"])
-@login_required
-def delete():
-    pid = request.form.get("id")
-    if not pid:
-        flash("Thiếu id.", "danger")
-        return redirect(url_for("index"))
-
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM patients WHERE id=%s", (int(pid),))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    flash("Đã xóa.", "success")
-    return redirect(url_for("index"))
-
-
-@app.route("/stats", methods=["GET"])
-@login_required
-def stats():
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT result, COUNT(*) as cnt FROM patients GROUP BY result")
-    rows = cursor.fetchall()
-    cursor.close()
-    conn.close()
-
-    counts = {"High Risk": 0, "Low Risk": 0}
-    for r in rows:
-        if r["result"] in counts:
-            counts[r["result"]] = int(r["cnt"])
-
-    return jsonify(counts=counts)
-
-
-if __name__ == "__main__":
-    app.run(debug=True)

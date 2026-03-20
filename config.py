@@ -8,12 +8,8 @@ class Config:
     # Flask
     SECRET_KEY: str = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 
-    # MySQL
-    MYSQL_HOST: str = os.environ.get("MYSQL_HOST", "localhost")
-    MYSQL_PORT: int = int(os.environ.get("MYSQL_PORT", "3306"))
-    MYSQL_USER: str = os.environ.get("MYSQL_USER", "root")
-    MYSQL_PASSWORD: str = os.environ.get("MYSQL_PASSWORD", "")
-    MYSQL_DATABASE: str = os.environ.get("MYSQL_DATABASE", "disease_db")
+    # SQLite
+    SQLITE_PATH: Path = Path(os.environ.get("SQLITE_PATH", "disease_prediction.sqlite"))
 
     # Model artifacts
     MODEL_DIR: Path = Path(os.environ.get("MODEL_DIR", "models"))
@@ -48,6 +44,10 @@ class Config:
         "Age": (0, 120),
     }
 
+    # Gemini (optional)
+    GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    GEMINI_ENABLED: bool = os.environ.get("GEMINI_ENABLED", "1") == "1"
+
 
 cfg = Config()
-

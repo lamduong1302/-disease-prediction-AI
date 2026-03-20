@@ -28,6 +28,13 @@
       {% endfor %}
     </ul>
 
+    {% if gemini_explanation %}
+      <h5 class="mt-4 mb-2">Gemini Explanation</h5>
+      <div class="alert alert-primary">
+        {{ gemini_explanation }}
+      </div>
+    {% endif %}
+
     <h5 class="mt-4 mb-2">Recommendations</h5>
     <ul>
       {% for r in recommendations %}
