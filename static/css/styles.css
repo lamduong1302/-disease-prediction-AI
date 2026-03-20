@@ -1,0 +1,25 @@
+.risk-low { background: #d1e7dd; }
+.risk-medium { background: #fff3cd; }
+.risk-high { background: #f8d7da; }
+
+.risk-low { border-color: #badbcc !important; }
+.risk-medium { border-color: #ffe69c !important; }
+.risk-high { border-color: #f1aeb5 !important; }
+
+.info-icon{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid #adb5bd;
+  font-weight: 700;
+  font-size: 12px;
+  color: #6c757d;
+  background: #fff;
+  cursor: help;
+  line-height: 1;
+  user-select: none;
+}
+

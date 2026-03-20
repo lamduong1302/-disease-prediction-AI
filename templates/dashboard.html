@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Disease Prediction{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Dashboard</h3>
+    <div class="text-muted small">User: {{ username }}</div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small">Total predictions</div>
+          <div class="fs-4 fw-bold" id="totalPred">0</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small">Positive count</div>
+          <div class="fs-4 fw-bold" id="posCount">0</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small">Positive rate</div>
+          <div class="fs-4 fw-bold" id="posRate">0%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mt-3">
+    <div class="card-body">
+      <h5 class="mb-3">Risk distribution</h5>
+      <canvas id="riskChart" height="120"></canvas>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mt-3">
+    <div class="card-body">
+      <h5 class="mb-3">Recent predictions (last 10)</h5>
+      <div class="table-responsive">
+        <table class="table table-striped align-middle">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Age</th>
+              <th>Glucose</th>
+              <th>BP</th>
+              <th>BMI</th>
+              <th>Result</th>
+              <th>Probability</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody id="recentBody">
+            <tr>
+              <td colspan="8" class="text-muted text-center">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}
+

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Result - Disease Prediction{% endblock %}
+
+{% block content %}
+  {% if risk == "High" %}
+    <div class="alert alert-danger risk-high">
+  {% elif risk == "Medium" %}
+    <div class="alert alert-warning risk-medium">
+  {% else %}
+    <div class="alert alert-success risk-low">
+  {% endif %}
+
+    <h4 class="alert-heading mb-2">Prediction Result</h4>
+    <div class="mb-1"><b>Result:</b> {{ result }}</div>
+    <div class="mb-1">
+      <b>Probability:</b>
+      {{ (probability * 100) | round(2) }}% ({{ probability }})
+    </div>
+    <div class="mb-0"><b>Risk level:</b> {{ risk }}</div>
+
+  </div>
+
+  <div class="mt-3">
+    <h5 class="mb-2">Causes (Top factors)</h5>
+    <ul>
+      {% for c in causes %}
+        <li class="mb-1">{{ c }}</li>
+      {% endfor %}
+    </ul>
+
+    <h5 class="mt-4 mb-2">Recommendations</h5>
+    <ul>
+      {% for r in recommendations %}
+        <li class="mb-1">{{ r }}</li>
+      {% endfor %}
+    </ul>
+
+    <h5 class="mt-4 mb-2">Nutrition Tips</h5>
+    <ul>
+      {% for t in nutrition_tips %}
+        <li class="mb-1">{{ t }}</li>
+      {% endfor %}
+    </ul>
+
+    <div class="alert alert-secondary mt-4 mb-0">
+      {{ disclaimer }}
+    </div>
+  </div>
+
+  <div class="text-muted small mb-3">
+    Prediction ID: {{ prediction_id }}
+  </div>
+
+  <div class="d-flex gap-2">
+    <a class="btn btn-primary" href="{{ url_for('index') }}">Predict again</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Dashboard</a>
+  </div>
+{% endblock %}
+

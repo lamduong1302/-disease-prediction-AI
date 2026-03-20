@@ -1,0 +1,36 @@
+{
+  "best_model": "random_forest",
+  "expects_scaled": false,
+  "logistic_regression_metrics": {
+    "accuracy": 0.7077922077922078,
+    "precision": 0.6,
+    "recall": 0.5,
+    "confusion_matrix": [
+      [
+        82,
+        18
+      ],
+      [
+        27,
+        27
+      ]
+    ],
+    "proba_available": true
+  },
+  "random_forest_metrics": {
+    "accuracy": 0.7532467532467533,
+    "precision": 0.6739130434782609,
+    "recall": 0.5740740740740741,
+    "confusion_matrix": [
+      [
+        85,
+        15
+      ],
+      [
+        23,
+        31
+      ]
+    ],
+    "proba_available": true
+  }
+}
