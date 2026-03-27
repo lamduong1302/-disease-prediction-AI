@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Nhật ký kiểm tra - Disease Prediction{% endblock %}
+
+{% block content %}
+  <div class="card shadow-sm app-card">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">Nhật ký kiểm tra cá nhân</h4>
+        <div class="d-flex gap-2">
+          <a class="btn btn-sm btn-primary app-btn-primary" href="{{ url_for('index') }}">Kiểm tra mới</a>
+          <form method="post" action="{{ url_for('clear_history') }}" onsubmit="return confirm('Bạn có chắc chắn muốn xóa toàn bộ nhật ký?');">
+            <button class="btn btn-sm btn-danger" type="submit">Xóa toàn bộ</button>
+          </form>
+        </div>
+      </div>
+
+      {% if logs %}
+        <div class="table-responsive">
+          <table class="table table-bordered align-middle modern-table">
+            <thead>
+              <tr>
+                <th>Thời gian</th>
+                <th>Kết quả</th>
+                <th>Mức độ</th>
+                <th>Xác suất</th>
+                <th>Chỉ số chính</th>
+                <th>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for log in logs %}
+                <tr>
+                  <td>{{ log.created_at }}</td>
+                  <td>{{ log.result_vi }}</td>
+                  <td><span class="badge {{ log.risk_badge }}">{{ log.risk_vi }}</span></td>
+                  <td>{{ (log.probability * 100) | round(2) }}%</td>
+                  <td>
+                    Glucose: {{ log.features.Glucose }},
+                    BMI: {{ log.features.BMI }},
+                    BP: {{ log.features.BloodPressure }},
+                    Age: {{ log.features.Age }}
+                  </td>
+                  <td>
+                    <form method="post" action="{{ url_for('delete_history_item', log_id=log.id) }}" onsubmit="return confirm('Xóa bản ghi này?');">
+                      <button class="btn btn-sm btn-outline-danger" type="submit">Xóa</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="text-muted">Bạn chưa có lịch sử kiểm tra nào.</div>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

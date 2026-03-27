@@ -14,6 +14,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 
 from config import cfg
 
@@ -82,28 +83,47 @@ def main():
 
     rf_metrics = evaluate_binary(y_test, rf_pred, rf_proba)
 
-    # Choose best by accuracy
-    best_name = "logistic_regression" if lr_metrics["accuracy"] >= rf_metrics["accuracy"] else "random_forest"
-    best_model = lr if best_name == "logistic_regression" else rf
-    expects_scaled = best_name == "logistic_regression"
+    # SVM branch (comparison model)
+    svm = SVC(C=1.0, kernel="rbf", gamma="scale", probability=True, random_state=42)
+    svm.fit(X_train_scaled, y_train)
+    svm_pred = svm.predict(X_test_scaled)
+    svm_proba = svm.predict_proba(X_test_scaled)[:, 1]
 
-    joblib.dump(best_model, str(models_dir / "model.pkl"))
+    svm_metrics = evaluate_binary(y_test, svm_pred, svm_proba)
+
+    # Save all 3 models, but Random Forest is the main model for inference.
+    joblib.dump(rf, str(cfg.RF_MODEL_PATH))
+    joblib.dump(lr, str(cfg.LR_MODEL_PATH))
+    joblib.dump(svm, str(cfg.SVM_MODEL_PATH))
     joblib.dump(scaler, str(models_dir / "scaler.pkl"))
 
+    ranking = sorted(
+        [
+            ("random_forest", rf_metrics["accuracy"]),
+            ("logistic_regression", lr_metrics["accuracy"]),
+            ("svm", svm_metrics["accuracy"]),
+        ],
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
     meta = {
-        "best_model": best_name,
-        "expects_scaled": expects_scaled,
+        "main_model": "random_forest",
+        "ranking_by_accuracy": ranking,
         "logistic_regression_metrics": lr_metrics,
         "random_forest_metrics": rf_metrics,
+        "svm_metrics": svm_metrics,
     }
     (models_dir / "metadata.json").write_text(
         json.dumps(meta, indent=2), encoding="utf-8"
     )
 
     print("Training done.")
-    print("Best model:", best_name)
+    print("Main model: random_forest")
     print("Saved:")
-    print("- models/model.pkl")
+    print("- models/random_forest.pkl")
+    print("- models/logistic_regression.pkl")
+    print("- models/svm.pkl")
     print("- models/scaler.pkl")
     print("- models/metadata.json")
 

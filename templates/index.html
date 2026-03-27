@@ -2,16 +2,32 @@
 {% block title %}Predict - Disease Prediction{% endblock %}
 
 {% block content %}
+  <div class="hero-card mb-4">
+    <h2 class="mb-2">Hệ thống dự đoán nguy cơ tiểu đường</h2>
+    <p class="mb-0 text-secondary">
+      Quy trình chuẩn: Chuẩn hóa dữ liệu (StandardScaler) -> Logistic Regression (baseline) -> Random Forest (mô hình chính) -> SVM (so sánh).
+    </p>
+    <div class="mt-3 d-flex gap-2">
+      <span class="badge text-bg-light border">Người dùng: {{ user.username }}</span>
+      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('history') }}">Xem nhật ký cá nhân</a>
+    </div>
+  </div>
+
   <div class="row g-4">
     <div class="col-lg-5">
-      <div class="card shadow-sm">
+      <div class="card shadow-sm app-card">
         <div class="card-body">
-          <h3 class="mb-3">Disease Prediction (Diabetes)</h3>
-          <p class="text-muted mb-4">
-            Nhập thông tin sức khỏe. Hệ thống sẽ dự đoán và lưu lịch sử dự đoán vào MySQL.
-          </p>
+          <h4 class="mb-3">Nhập chỉ số sức khỏe</h4>
+          <p class="text-muted mb-3">Bạn có thể điền tay hoặc chọn nhanh mẫu dữ liệu.</p>
 
-          <form method="post" action="{{ url_for('predict') }}">
+          <div class="d-flex flex-wrap gap-2 mb-3">
+            <button class="btn btn-sm btn-outline-primary" type="button" onclick="fillPreset('low')">Mẫu nguy cơ thấp</button>
+            <button class="btn btn-sm btn-outline-warning" type="button" onclick="fillPreset('medium')">Mẫu nguy cơ trung bình</button>
+            <button class="btn btn-sm btn-outline-danger" type="button" onclick="fillPreset('high')">Mẫu nguy cơ cao</button>
+            <button class="btn btn-sm btn-outline-secondary" type="button" onclick="resetForm()">Xóa nhanh</button>
+          </div>
+
+          <form id="predictForm" method="post" action="{{ url_for('predict') }}">
             <div class="mb-3">
               <label class="form-label d-flex align-items-center gap-2">
                 Pregnancies <span class="text-muted fw-normal"/span>
@@ -109,38 +125,78 @@
               <input class="form-control" name="Age" type="number" min="0" step="1" required>
             </div>
 
-            <button class="btn btn-primary w-100" type="submit">Predict</button>
+            <button class="btn btn-primary w-100 app-btn-primary" type="submit">Phân tích nguy cơ</button>
           </form>
 
           <div class="text-muted small mt-3">
-            API endpoint: <code>POST /predict</code> (gửi JSON) hoặc submit form (HTML).
+            API endpoint: <code>POST /predict</code> (JSON hoặc form-data).
           </div>
         </div>
       </div>
     </div>
 
     <div class="col-lg-7">
-      <div class="card shadow-sm">
+      <div class="card shadow-sm app-card">
         <div class="card-body">
-          <h3 class="mb-3">Risk levels</h3>
+          <h4 class="mb-3">So sánh mô hình</h4>
+
+          <div class="small text-muted mb-3">
+            Random Forest được dùng để suy luận chính vì độ ổn định cao trên dữ liệu phi tuyến.
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-bordered small align-middle modern-table">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Accuracy</th>
+                  <th>Precision</th>
+                  <th>Recall</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Logistic Regression (Baseline)</td>
+                  <td>{{ ((metrics.logistic.accuracy if metrics.logistic else 0) * 100) | round(2) }}%</td>
+                  <td>{{ ((metrics.logistic.precision if metrics.logistic else 0) * 100) | round(2) }}%</td>
+                  <td>{{ ((metrics.logistic.recall if metrics.logistic else 0) * 100) | round(2) }}%</td>
+                </tr>
+                <tr>
+                  <td>Random Forest (Main)</td>
+                  <td>{{ ((metrics.random_forest.accuracy if metrics.random_forest else 0) * 100) | round(2) }}%</td>
+                  <td>{{ ((metrics.random_forest.precision if metrics.random_forest else 0) * 100) | round(2) }}%</td>
+                  <td>{{ ((metrics.random_forest.recall if metrics.random_forest else 0) * 100) | round(2) }}%</td>
+                </tr>
+                <tr>
+                  <td>SVM (Compare)</td>
+                  <td>{{ ((metrics.svm.accuracy if metrics.svm else 0) * 100) | round(2) }}%</td>
+                  <td>{{ ((metrics.svm.precision if metrics.svm else 0) * 100) | round(2) }}%</td>
+                  <td>{{ ((metrics.svm.recall if metrics.svm else 0) * 100) | round(2) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <hr class="my-4" />
+          <h4 class="mb-3">Mức độ rủi ro</h4>
 
           <div class="row g-3">
             <div class="col-md-4">
-              <div class="p-3 rounded border risk-low">
+              <div class="p-3 rounded border risk-low card-stat">
                 <b>Low</b>
                 <div class="text-muted">Probability &lt; 30%</div>
               </div>
             </div>
             <div class="col-md-4">
-              <div class="p-3 rounded border risk-medium">
+              <div class="p-3 rounded border risk-medium card-stat">
                 <b>Medium</b>
-                <div class="text-muted">30% - 70%</div>
+                <div class="text-muted">30% - 60%</div>
               </div>
             </div>
             <div class="col-md-4">
-              <div class="p-3 rounded border risk-high">
+              <div class="p-3 rounded border risk-high card-stat">
                 <b>High</b>
-                <div class="text-muted">Probability &gt; 70%</div>
+                <div class="text-muted">Probability &gt;= 60%</div>
               </div>
             </div>
           </div>
@@ -152,13 +208,46 @@
             Output JSON (khi gửi request JSON):
           </div>
           <pre class="bg-white p-3 rounded border small mb-0">{
+  "main_model": "Random Forest",
   "result": "Positive",
   "probability": 0.82,
-  "risk": "High"
+  "risk": "High",
+  "health_report": { ... }
 }</pre>
         </div>
       </div>
     </div>
   </div>
+
+  <script>
+    const PRESETS = {
+      low: {
+        Pregnancies: 1, Glucose: 95, BloodPressure: 72, SkinThickness: 20,
+        Insulin: 85, BMI: 23.5, DiabetesPedigreeFunction: 0.28, Age: 28
+      },
+      medium: {
+        Pregnancies: 2, Glucose: 122, BloodPressure: 128, SkinThickness: 30,
+        Insulin: 145, BMI: 27.8, DiabetesPedigreeFunction: 0.72, Age: 41
+      },
+      high: {
+        Pregnancies: 6, Glucose: 168, BloodPressure: 145, SkinThickness: 42,
+        Insulin: 230, BMI: 33.2, DiabetesPedigreeFunction: 1.15, Age: 56
+      }
+    };
+
+    function fillPreset(type) {
+      const form = document.getElementById("predictForm");
+      const data = PRESETS[type];
+      Object.keys(data).forEach((key) => {
+        const input = form.querySelector(`[name="${key}"]`);
+        if (input) input.value = data[key];
+      });
+    }
+
+    function resetForm() {
+      const form = document.getElementById("predictForm");
+      form.reset();
+    }
+  </script>
 {% endblock %}
 

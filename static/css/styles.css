@@ -1,10 +1,89 @@
-.risk-low { background: #d1e7dd; }
-.risk-medium { background: #fff3cd; }
-.risk-high { background: #f8d7da; }
+:root {
+  --app-primary: #7c3aed;
+  --app-secondary: #ec4899;
+  --app-bg: #eef2f7;
+  --app-text: #111827;
+}
 
-.risk-low { border-color: #badbcc !important; }
-.risk-medium { border-color: #ffe69c !important; }
-.risk-high { border-color: #f1aeb5 !important; }
+body {
+  font-family: "Be Vietnam Pro", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  color: var(--app-text);
+  background:
+    radial-gradient(circle at 8% 10%, rgba(124, 58, 237, 0.14) 0%, rgba(124, 58, 237, 0) 35%),
+    radial-gradient(circle at 92% 6%, rgba(236, 72, 153, 0.16) 0%, rgba(236, 72, 153, 0) 40%),
+    linear-gradient(145deg, #f8fafc 0%, #edf2ff 45%, #e9eef9 100%);
+}
+
+.app-navbar {
+  background: linear-gradient(90deg, #3b0764 0%, #581c87 40%, #0f172a 100%);
+  box-shadow: 0 6px 24px rgba(17, 24, 39, 0.18);
+}
+
+.hero-card {
+  border-radius: 16px;
+  background: linear-gradient(120deg, #ffffff 0%, #f7f5ff 55%, #fff3fb 100%);
+  border: 1px solid #e3d7ff;
+  padding: 22px;
+  box-shadow: 0 12px 28px rgba(88, 28, 135, 0.12);
+}
+
+.app-card {
+  border-radius: 16px;
+  border: 1px solid #e5d9fb;
+  box-shadow: 0 10px 26px rgba(49, 46, 129, 0.09);
+}
+
+.modern-table thead th {
+  background: linear-gradient(90deg, #f5f3ff 0%, #fdf2f8 100%);
+  color: #4c1d95;
+}
+
+.risk-low { background: #d1fae5; border-color: #86efac !important; }
+.risk-medium { background: #fef9c3; border-color: #fde047 !important; }
+.risk-high { background: #fee2e2; border-color: #fca5a5 !important; }
+
+.card-stat {
+  min-height: 92px;
+}
+
+.metric-box {
+  background: linear-gradient(90deg, #faf5ff 0%, #fff1f8 100%);
+  border: 1px solid #e8ddff;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.metric-label {
+  font-size: 13px;
+  color: #4b5b8f;
+  margin-bottom: 6px;
+}
+
+.metric-value {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.app-progress {
+  height: 22px;
+  border-radius: 999px;
+  background: #ede9fe;
+}
+
+.progress-width-low { width: 28%; }
+.progress-width-medium { width: 58%; }
+.progress-width-high { width: 86%; }
+
+.app-btn-primary {
+  background: linear-gradient(90deg, var(--app-primary) 0%, var(--app-secondary) 100%);
+  border: none;
+  box-shadow: 0 10px 18px rgba(124, 58, 237, 0.28);
+}
+
+.app-btn-primary:hover {
+  filter: brightness(1.05);
+}
 
 .info-icon{
   display: inline-flex;
@@ -13,11 +92,11 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 1px solid #adb5bd;
+  border: 1px solid #9fb0e8;
   font-weight: 700;
   font-size: 12px;
-  color: #6c757d;
-  background: #fff;
+  color: #415285;
+  background: #f4f7ff;
   cursor: help;
   line-height: 1;
   user-select: none;
