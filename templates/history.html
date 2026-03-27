@@ -15,43 +15,140 @@
       </div>
 
       {% if logs %}
-        <div class="table-responsive">
-          <table class="table table-bordered align-middle modern-table">
-            <thead>
-              <tr>
-                <th>Thời gian</th>
-                <th>Kết quả</th>
-                <th>Mức độ</th>
-                <th>Xác suất</th>
-                <th>Chỉ số chính</th>
-                <th>Thao tác</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for log in logs %}
-                <tr>
-                  <td>{{ log.created_at }}</td>
-                  <td>{{ log.result_vi }}</td>
-                  <td><span class="badge {{ log.risk_badge }}">{{ log.risk_vi }}</span></td>
-                  <td>{{ (log.probability * 100) | round(2) }}%</td>
-                  <td>
-                    Glucose: {{ log.features.Glucose }},
-                    BMI: {{ log.features.BMI }},
-                    BP: {{ log.features.BloodPressure }},
-                    Age: {{ log.features.Age }}
-                  </td>
-                  <td>
-                    <form method="post" action="{{ url_for('delete_history_item', log_id=log.id) }}" onsubmit="return confirm('Xóa bản ghi này?');">
-                      <button class="btn btn-sm btn-outline-danger" type="submit">Xóa</button>
-                    </form>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+        <div class="list-group">
+          {% for log in logs %}
+            <div class="list-group-item" id="log-{{ log.id }}">
+              <div class="d-flex justify-content-between align-items-center">
+                <div class="flex-grow-1">
+                  <div class="d-flex gap-3 align-items-center">
+                    <div>
+                      <small class="text-muted">{{ log.created_at }}</small>
+                      <br>
+                      <strong>{{ log.result_vi }}</strong>
+                      <span class="badge {{ log.risk_badge }} ms-2">{{ log.risk_vi }}</span>
+                    </div>
+                    <div class="text-center">
+                      <div class="fw-bold text-primary" style="font-size: 1.2rem;">
+                        {{ (log.probability * 100) | round(2) }}%
+                      </div>
+                      <small class="text-muted">Xác suất</small>
+                    </div>
+                    <div class="flex-grow-1">
+                      <div class="small">
+                        <strong>Chỉ số:</strong> Glucose {{ log.features.Glucose }}, 
+                        BMI {{ log.features.BMI }}, 
+                        BP {{ log.features.BloodPressure }}, 
+                        Age {{ log.features.Age }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="d-flex gap-2 ms-3">
+                  <button class="btn btn-sm btn-outline-primary" type="button" onclick="toggleDetails('log-{{ log.id }}')">
+                    <span class="toggle-text">Xem chi tiết</span>
+                  </button>
+                  <form method="post" action="{{ url_for('delete_history_item', log_id=log.id) }}" onsubmit="return confirm('Xóa bản ghi này?');" style="display: inline;">
+                    <button class="btn btn-sm btn-outline-danger" type="submit">Xóa</button>
+                  </form>
+                </div>
+              </div>
+
+              <!-- Chi tiết mở rộng -->
+              <div class="details-section" id="details-log-{{ log.id }}" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid #dee2e6;">
+                <div class="row g-3">
+                  <div class="col-md-6">
+                    <h6 class="mb-2">Thông tin chỉ số sức khỏe</h6>
+                    <table class="table table-sm">
+                      <tr><td class="text-muted">Số lần mang thai:</td><td><strong>{{ log.features.Pregnancies }}</strong></td></tr>
+                      <tr><td class="text-muted">Glucose (mg/dL):</td><td><strong>{{ log.features.Glucose }}</strong></td></tr>
+                      <tr><td class="text-muted">Huyết áp (mm Hg):</td><td><strong>{{ log.features.BloodPressure }}</strong></td></tr>
+                      <tr><td class="text-muted">Độ dày lớp mỡ (mm):</td><td><strong>{{ log.features.SkinThickness }}</strong></td></tr>
+                      <tr><td class="text-muted">Insulin (μU/mL):</td><td><strong>{{ log.features.Insulin }}</strong></td></tr>
+                      <tr><td class="text-muted">BMI (kg/m²):</td><td><strong>{{ log.features.BMI }}</strong></td></tr>
+                      <tr><td class="text-muted">DiabetesPedigreeFunction:</td><td><strong>{{ log.features.DiabetesPedigreeFunction }}</strong></td></tr>
+                      <tr><td class="text-muted">Tuổi (năm):</td><td><strong>{{ log.features.Age }}</strong></td></tr>
+                    </table>
+                  </div>
+                  <div class="col-md-6">
+                    <h6 class="mb-2">Kết quả đánh giá</h6>
+                    <div class="alert alert-{% if log.risk == 'High' %}danger{% elif log.risk == 'Medium' %}warning{% else %}success{% endif %} mb-3">
+                      <strong>Mức độ rủi ro:</strong> {{ log.risk_vi }}<br>
+                      <strong>Kết quả:</strong> {{ log.result_vi }}<br>
+                      <strong>Xác suất:</strong> {{ (log.probability * 100) | round(2) }}%
+                    </div>
+                    {% if log.report %}
+                      <div class="small text-muted">
+                        <p><strong>Ghi chú:</strong></p>
+                        <p>{{ log.report | safe }}</p>
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
+            </div>
+          {% endfor %}
         </div>
       {% else %}
         <div class="text-muted">Bạn chưa có lịch sử kiểm tra nào.</div>
+      {% endif %}
+
+      <style>
+        .list-group-item {
+          background: #f8f9fa;
+          border: 1px solid #dee2e6;
+          margin-bottom: 10px;
+          border-radius: 4px;
+          padding: 15px;
+        }
+        .list-group-item:hover {
+          background: #fff;
+          border-color: #0d6efd;
+        }
+        .details-section {
+          background: #fff;
+          padding: 15px;
+          border-radius: 4px;
+          animation: slideDown 0.3s ease;
+        }
+        @keyframes slideDown {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .details-section table {
+          margin-bottom: 0;
+        }
+        .details-section table td {
+          padding: 5px 8px;
+          border: none;
+        }
+      </style>
+
+      <script>
+        function toggleDetails(elementId) {
+          const detailsId = 'details-' + elementId;
+          const detailsSection = document.getElementById(detailsId);
+          const button = event.target.closest('button');
+          const toggleText = button.querySelector('.toggle-text');
+          
+          if (detailsSection.style.display === 'none') {
+            detailsSection.style.display = 'block';
+            toggleText.textContent = 'Ẩn chi tiết';
+            button.classList.remove('btn-outline-primary');
+            button.classList.add('btn-primary');
+          } else {
+            detailsSection.style.display = 'none';
+            toggleText.textContent = 'Xem chi tiết';
+            button.classList.add('btn-outline-primary');
+            button.classList.remove('btn-primary');
+          }
+        }
+      </script>
       {% endif %}
     </div>
   </div>
