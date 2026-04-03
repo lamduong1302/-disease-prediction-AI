@@ -9,11 +9,13 @@ class Config:
     SECRET_KEY: str = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 
     # PostgreSQL (required for app data)
-    # Example:
-    #   set POSTGRES_DSN=postgresql://user:password@localhost:5432/disease_prediction_app
-    POSTGRES_DSN: str = os.environ.get(
-        "POSTGRES_DSN",
-        "postgresql://postgres:postgres@localhost:5432/disease_prediction_app",
+    # Railway thường cung cấp sẵn biến env `DATABASE_URL`.
+    # Bạn có thể set riêng `POSTGRES_DSN` nếu muốn.
+    POSTGRES_DSN: str = (
+        os.environ.get("POSTGRES_DSN")
+        or os.environ.get("DATABASE_URL")
+        or os.environ.get("RAILWAY_DATABASE_URL")
+        or ""
     )
 
     # Model artifacts

@@ -17,6 +17,7 @@ app = Flask(__name__)
 app.secret_key = cfg.SECRET_KEY
 
 _DB_INIT_DONE = False
+_DB_AVAILABLE = False
 
 
 def get_db_connection():
@@ -25,7 +26,17 @@ def get_db_connection():
     Yêu cầu thiết lập env `POSTGRES_DSN`.
     """
     try:
-        conn = psycopg2.connect(cfg.POSTGRES_DSN, cursor_factory=RealDictCursor)
+        if not cfg.POSTGRES_DSN:
+            raise RuntimeError(
+                "Thiếu cấu hình PostgreSQL. Vui lòng set env `POSTGRES_DSN` hoặc `DATABASE_URL`."
+            )
+
+        dsn = cfg.POSTGRES_DSN
+        # Railway/Postgres thường yêu cầu SSL. Nếu DSN chưa có sslmode thì bật mặc định.
+        if "sslmode=" not in dsn and dsn.startswith("postgresql://"):
+            dsn = dsn + ("&" if "?" in dsn else "?") + "sslmode=require"
+
+        conn = psycopg2.connect(dsn, cursor_factory=RealDictCursor)
         conn.autocommit = True
         return conn
     except Exception as e:
@@ -36,40 +47,51 @@ def get_db_connection():
 
 
 def ensure_schema():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    global _DB_AVAILABLE
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS prediction_logs (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            result TEXT NOT NULL,
-            probability DOUBLE PRECISION NOT NULL,
-            risk TEXT NOT NULL,
-            features_json TEXT NOT NULL,
-            report_json TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prediction_logs (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                result TEXT NOT NULL,
+                probability DOUBLE PRECISION NOT NULL,
+                risk TEXT NOT NULL,
+                features_json TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
         )
-        """
-    )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_logs_user_id ON prediction_logs(user_id)"
-    )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_logs_created_at ON prediction_logs(created_at)"
-    )
-    cur.close()
-    conn.close()
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_logs_user_id ON prediction_logs(user_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_logs_created_at ON prediction_logs(created_at)"
+        )
+        cur.close()
+        conn.close()
+        _DB_AVAILABLE = True
+    except Exception as e:
+        _DB_AVAILABLE = False
+        # In ra dạng ASCII an toan (tránh lỗi unicode trong console).
+        safe = repr(e).encode("unicode_escape").decode("ascii", errors="ignore")
+        print("[warning] PostgreSQL not available:", safe)
+        # Không ném lỗi để tránh server bị 500 ở mọi request.
+        return False
+    return True
 
 
 @app.before_request
@@ -78,8 +100,44 @@ def _bootstrap():
     global _DB_INIT_DONE
     if _DB_INIT_DONE:
         return
-    ensure_schema()
-    _DB_INIT_DONE = True
+    ok = ensure_schema()
+    if ok:
+        _DB_INIT_DONE = True
+    # Không trả về giá trị (Flask before_request phải trả None).
+    return None
+
+
+def _db_error_response(*, status_code: int = 503):
+    # Trả lỗi rõ ràng tiếng Việt thay vì 500 chung
+    msg = (
+        "Không thể kết nối PostgreSQL. "
+        "Vui lòng kiểm tra server PostgreSQL đang chạy và biến môi trường `POSTGRES_DSN`."
+    )
+    details = None
+    try:
+        details = str(cfg.POSTGRES_DSN)
+    except Exception:
+        details = None
+
+    if request.is_json or request.content_type == "application/json":
+        payload = {"error": msg}
+        if details:
+            payload["dsn"] = details
+        return jsonify(payload), status_code
+    return render_template("db_error.html", message=msg, dsn=details), status_code
+
+
+@app.errorhandler(RuntimeError)
+def handle_runtime_error(e):
+    if "PostgreSQL" in str(e):
+        return _db_error_response()
+    # fallback
+    return render_template("db_error.html", message="Đã xảy ra lỗi trong hệ thống.", dsn=None), 500
+
+
+@app.errorhandler(psycopg2.OperationalError)
+def handle_psycopg_operational_error(e):
+    return _db_error_response()
 
 
 def login_required(fn):

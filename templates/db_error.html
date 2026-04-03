@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Lỗi kết nối PostgreSQL{% endblock %}
+
+{% block content %}
+  <div class="card shadow-sm app-card">
+    <div class="card-body">
+      <h4 class="mb-3">Không thể kết nối PostgreSQL</h4>
+      <div class="alert alert-warning mb-3">
+        {{ message }}
+      </div>
+
+      {% if dsn %}
+        <div class="small text-muted mb-3">
+          DSN hiện tại: <code>{{ dsn }}</code>
+        </div>
+      {% endif %}
+
+      <div class="small text-muted mb-3">
+        Gợi ý nhanh:
+        <ul class="mb-0">
+          <li>Kiểm tra server PostgreSQL có đang chạy và mở port.</li>
+          <li>Cập nhật biến môi trường <code>POSTGRES_DSN</code> đúng.</li>
+          <li>Chạy lại app.</li>
+        </ul>
+      </div>
+
+      <a class="btn btn-primary app-btn-primary" href="{{ url_for('index') }}">Quay lại</a>
+    </div>
+  </div>
+{% endblock %}
+
