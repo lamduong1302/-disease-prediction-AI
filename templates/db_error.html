@@ -9,9 +9,10 @@
         {{ message }}
       </div>
 
-      {% if dsn %}
+      {% if dsn_preview %}
         <div class="small text-muted mb-3">
-          DSN hiện tại: <code>{{ dsn }}</code>
+          Connection string (preview, không có mật khẩu):
+          <code>{{ dsn_preview }}</code>
         </div>
       {% endif %}
 
@@ -19,7 +20,7 @@
         Gợi ý nhanh:
         <ul class="mb-0">
           <li>Kiểm tra server PostgreSQL có đang chạy và mở port.</li>
-          <li>Cập nhật biến môi trường <code>POSTGRES_DSN</code> đúng.</li>
+          <li>Cập nhật biến môi trường <code>POSTGRES_DSN</code> (hoặc <code>DATABASE_URL</code>/<code>RAILWAY_DATABASE_URL</code>) đúng.</li>
           <li>Chạy lại app.</li>
         </ul>
       </div>

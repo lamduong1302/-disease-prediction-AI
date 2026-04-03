@@ -13,10 +13,7 @@ class Config:
     # Bạn có thể set riêng `POSTGRES_DSN` nếu muốn.
     POSTGRES_DSN: str = (
         os.environ.get("POSTGRES_DSN")
-        or os.environ.get("DATABASE_URL")
-        or os.environ.get("RAILWAY_DATABASE_URL")
-        or ""
-    )
+    ).strip()
 
     # Model artifacts
     MODEL_DIR: Path = Path(os.environ.get("MODEL_DIR", "models"))

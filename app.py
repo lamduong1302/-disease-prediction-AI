@@ -1,6 +1,7 @@
 import json
 import os
 from functools import wraps
+from urllib.parse import urlparse, unquote
 
 import joblib
 import numpy as np
@@ -33,7 +34,7 @@ def get_db_connection():
 
         dsn = cfg.POSTGRES_DSN
         # Railway/Postgres thường yêu cầu SSL. Nếu DSN chưa có sslmode thì bật mặc định.
-        if "sslmode=" not in dsn and dsn.startswith("postgresql://"):
+        if "sslmode=" not in dsn and (dsn.startswith("postgresql://") or dsn.startswith("postgres://")):
             dsn = dsn + ("&" if "?" in dsn else "?") + "sslmode=require"
 
         conn = psycopg2.connect(dsn, cursor_factory=RealDictCursor)
@@ -111,20 +112,30 @@ def _db_error_response(*, status_code: int = 503):
     # Trả lỗi rõ ràng tiếng Việt thay vì 500 chung
     msg = (
         "Không thể kết nối PostgreSQL. "
-        "Vui lòng kiểm tra server PostgreSQL đang chạy và biến môi trường `POSTGRES_DSN`."
+        "Vui lòng kiểm tra server PostgreSQL đang chạy và biến môi trường "
+        "`POSTGRES_DSN` (hoặc `DATABASE_URL`/`RAILWAY_DATABASE_URL`)."
     )
-    details = None
+    dsn_preview = None
     try:
-        details = str(cfg.POSTGRES_DSN)
+        if cfg.POSTGRES_DSN:
+            u = urlparse(cfg.POSTGRES_DSN)
+            user = unquote(u.username) if u.username else ""
+            host = u.hostname or ""
+            port = u.port or ""
+            dbname = u.path.lstrip("/")
+            # An toan: khong hien password.
+            auth_part = f"{user}:***@" if user else ""
+            port_part = f":{port}" if port else ""
+            dsn_preview = f"{u.scheme}://{auth_part}{host}{port_part}/{dbname}"
     except Exception:
-        details = None
+        dsn_preview = None
 
     if request.is_json or request.content_type == "application/json":
         payload = {"error": msg}
-        if details:
-            payload["dsn"] = details
+        if dsn_preview:
+            payload["dsn_preview"] = dsn_preview
         return jsonify(payload), status_code
-    return render_template("db_error.html", message=msg, dsn=details), status_code
+    return render_template("db_error.html", message=msg, dsn_preview=dsn_preview), status_code
 
 
 @app.errorhandler(RuntimeError)

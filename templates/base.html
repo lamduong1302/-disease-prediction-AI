@@ -14,7 +14,7 @@
   <body>
     <nav class="navbar navbar-expand-lg app-navbar">
       <div class="container">
-        <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">Hệ thống dự đoán bệnh AI</a>
+        <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">Hệ thống dự đoán bệnh</a>
         <div class="d-flex align-items-center gap-2">
           {% if session.get("user_id") %}
             <span class="navbar-text text-light small me-2">Xin chào, {{ session.get("username") }}</span>
