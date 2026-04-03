@@ -1,18 +1,28 @@
 import os
-from dotenv import load_dotenv
 from dataclasses import dataclass
 from pathlib import Path
 
-# Load .env nếu có (local dev)
-load_dotenv()
+# Load .env cho local nếu package dotenv có sẵn.
+# Trên Railway không cần dotenv vì dùng Environment Variables.
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except Exception:
+    pass
 
 @dataclass(frozen=True)
 class Config:
     # Flask
     SECRET_KEY: str = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 
-    # PostgreSQL - IMPORTANT: Dùng os.environ.get() để lấy từ environment
-    POSTGRES_DSN: str = os.environ.get("POSTGRES_DSN", "").strip()
+    # PostgreSQL - ưu tiên POSTGRES_DSN, fallback cho Railway env names.
+    POSTGRES_DSN: str = (
+        os.environ.get("POSTGRES_DSN")
+        or os.environ.get("DATABASE_URL")
+        or os.environ.get("RAILWAY_DATABASE_URL")
+        or ""
+    ).strip()
 
     # Model artifacts
     MODEL_DIR: Path = Path(os.environ.get("MODEL_DIR", "models"))
@@ -49,8 +59,5 @@ class Config:
         "DiabetesPedigreeFunction": (0, 5),
         "Age": (0, 120),
     }
-
-# Không gọi ngay, để cho khi có request mới gọi
-_DB_INIT_DONE = False
 
 cfg = Config()

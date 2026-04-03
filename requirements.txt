@@ -1,5 +1,6 @@
 flask
 werkzeug
+python-dotenv
 joblib
 numpy
 pandas
