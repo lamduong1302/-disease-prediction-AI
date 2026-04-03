@@ -1,11 +1,12 @@
 import json
 import os
-import sqlite3
 from functools import wraps
 
 import joblib
 import numpy as np
 import pandas as pd
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -15,11 +16,23 @@ from config import cfg
 app = Flask(__name__)
 app.secret_key = cfg.SECRET_KEY
 
+_DB_INIT_DONE = False
 
-def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(cfg.SQLITE_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def get_db_connection():
+    """
+    Kết nối PostgreSQL.
+    Yêu cầu thiết lập env `POSTGRES_DSN`.
+    """
+    try:
+        conn = psycopg2.connect(cfg.POSTGRES_DSN, cursor_factory=RealDictCursor)
+        conn.autocommit = True
+        return conn
+    except Exception as e:
+        raise RuntimeError(
+            "Không kết nối được PostgreSQL. Vui lòng kiểm tra POSTGRES_DSN. Chi tiết: "
+            + str(e)
+        )
 
 
 def ensure_schema():
@@ -28,38 +41,45 @@ def ensure_schema():
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """
     )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS prediction_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             result TEXT NOT NULL,
-            probability REAL NOT NULL,
+            probability DOUBLE PRECISION NOT NULL,
             risk TEXT NOT NULL,
             features_json TEXT NOT NULL,
             report_json TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """
     )
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_user_id ON prediction_logs(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_created_at ON prediction_logs(created_at)")
-    conn.commit()
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_logs_user_id ON prediction_logs(user_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_logs_created_at ON prediction_logs(created_at)"
+    )
     cur.close()
     conn.close()
 
 
 @app.before_request
 def _bootstrap():
+    # Nếu PostgreSQL chưa sẵn sàng, sẽ lỗi ở các endpoint cần DB.
+    global _DB_INIT_DONE
+    if _DB_INIT_DONE:
+        return
     ensure_schema()
+    _DB_INIT_DONE = True
 
 
 def login_required(fn):
@@ -88,7 +108,7 @@ def save_prediction_log(*, user_id: int, result: str, probability: float, risk: 
     cur.execute(
         """
         INSERT INTO prediction_logs(user_id, result, probability, risk, features_json, report_json)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """,
         (
             int(user_id),
@@ -99,7 +119,6 @@ def save_prediction_log(*, user_id: int, result: str, probability: float, risk: 
             json.dumps(report, ensure_ascii=False),
         ),
     )
-    conn.commit()
     cur.close()
     conn.close()
 
@@ -330,7 +349,10 @@ def login():
         password = request.form.get("password") or ""
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT id, username, password_hash FROM users WHERE username=?", (username,))
+        cur.execute(
+            "SELECT id, username, password_hash FROM users WHERE username=%s",
+            (username,),
+        )
         user = cur.fetchone()
         cur.close()
         conn.close()
@@ -366,13 +388,12 @@ def register():
         cur = conn.cursor()
         try:
             cur.execute(
-                "INSERT INTO users(username, password_hash) VALUES (?, ?)",
+                "INSERT INTO users(username, password_hash) VALUES (%s, %s)",
                 (username, generate_password_hash(password)),
             )
-            conn.commit()
             flash("Đăng ký thành công. Mời bạn đăng nhập.", "success")
             return redirect(url_for("login"))
-        except sqlite3.IntegrityError:
+        except psycopg2.errors.UniqueViolation:
             flash("Tên đăng nhập đã tồn tại.", "danger")
         finally:
             cur.close()
@@ -394,9 +415,9 @@ def history():
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT id, result, probability, risk, features_json, created_at
+        SELECT id, result, probability, risk, features_json, report_json, created_at
         FROM prediction_logs
-        WHERE user_id=?
+        WHERE user_id=%s
         ORDER BY id DESC
         LIMIT 100
         """,
@@ -407,6 +428,7 @@ def history():
     risk_badge = {"Low": "text-bg-success", "Medium": "text-bg-warning", "High": "text-bg-danger"}
     result_vi = {"Positive": "Dương tính", "Negative": "Âm tính"}
     for row in cur.fetchall():
+        report = json.loads(row["report_json"]) if row["report_json"] else {}
         logs.append(
             {
                 "id": row["id"],
@@ -417,6 +439,12 @@ def history():
                 "risk_badge": risk_badge.get(row["risk"], "text-bg-secondary"),
                 "probability": float(row["probability"]),
                 "features": json.loads(row["features_json"]),
+                "report": report,
+                "indicator_reviews": report.get("indicator_reviews", []),
+                "warning_signals": report.get("warning_signals", []),
+                "priority_actions": report.get("priority_actions", []),
+                "recommendations": report.get("recommendations", []),
+                "follow_up_plan": report.get("follow_up_plan", []),
                 "created_at": row["created_at"],
             }
         )
@@ -431,11 +459,10 @@ def delete_history_item(log_id: int):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "DELETE FROM prediction_logs WHERE id=? AND user_id=?",
+        "DELETE FROM prediction_logs WHERE id=%s AND user_id=%s",
         (log_id, session["user_id"]),
     )
     deleted = cur.rowcount
-    conn.commit()
     cur.close()
     conn.close()
     if deleted:
@@ -450,9 +477,11 @@ def delete_history_item(log_id: int):
 def clear_history():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("DELETE FROM prediction_logs WHERE user_id=?", (session["user_id"],))
+    cur.execute(
+        "DELETE FROM prediction_logs WHERE user_id=%s",
+        (session["user_id"],),
+    )
     deleted = cur.rowcount
-    conn.commit()
     cur.close()
     conn.close()
     flash(f"Đã xóa toàn bộ nhật ký ({deleted} bản ghi).", "success")

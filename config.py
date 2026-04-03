@@ -7,7 +7,14 @@ from pathlib import Path
 class Config:
     # Flask
     SECRET_KEY: str = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
-    SQLITE_PATH: Path = Path(os.environ.get("SQLITE_PATH", "disease_prediction.sqlite"))
+
+    # PostgreSQL (required for app data)
+    # Example:
+    #   set POSTGRES_DSN=postgresql://user:password@localhost:5432/disease_prediction_app
+    POSTGRES_DSN: str = os.environ.get(
+        "POSTGRES_DSN",
+        "postgresql://postgres:postgres@localhost:5432/disease_prediction_app",
+    )
 
     # Model artifacts
     MODEL_DIR: Path = Path(os.environ.get("MODEL_DIR", "models"))

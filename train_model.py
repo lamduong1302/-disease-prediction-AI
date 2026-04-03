@@ -26,11 +26,9 @@ def load_dataset():
     cols = list(cfg.FEATURES) + ["Outcome"]
     df = pd.read_csv(DATA_URL, header=None, names=cols)
 
-    # In Pima dataset, zeros in several columns commonly represent missing values.
     zero_as_missing = ["Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
     df[zero_as_missing] = df[zero_as_missing].replace(0, np.nan)
 
-    # Median imputation (simple, stable for demo)
     df = df.fillna(df.median(numeric_only=True))
 
     X = df[list(cfg.FEATURES)].astype(float)

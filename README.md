@@ -49,3 +49,13 @@ Input JSON:
 ## Cau chot di thi
 > Trong bai toan Disease Prediction, em su dung Logistic Regression lam baseline, Random Forest lam mo hinh chinh vi do chinh xac cao, va SVM de so sanh. Ngoai ra, em co su dung K-Means de phan tich du lieu va tham khao cac phuong phap khac nhu KNN, Naive Bayes va Neural Network.
 
+## Database PostgreSQL
+App dung PostgreSQL de luu:
+- Tai khoan nguoi dung (`users`)
+- Nhat ky du doan theo tung nguoi (`prediction_logs`)
+
+Can thiet phai set env `POSTGRES_DSN`, vi du:
+```bash
+set POSTGRES_DSN=postgresql://user:password@localhost:5432/disease_prediction_app
+```
+
