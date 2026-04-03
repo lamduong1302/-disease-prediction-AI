@@ -23,8 +23,8 @@ _DB_AVAILABLE = False
 
 def get_db_connection():
     """
-    Kết nối PostgreSQL.
-    Yêu cầu thiết lập env `POSTGRES_DSN`.
+    Tạo kết nối PostgreSQL.
+    Cần một trong các biến: POSTGRES_DSN, DATABASE_URL hoặc RAILWAY_DATABASE_URL.
     """
     try:
         if not cfg.POSTGRES_DSN:
@@ -33,7 +33,7 @@ def get_db_connection():
             )
 
         dsn = cfg.POSTGRES_DSN
-        # Railway/Postgres thường yêu cầu SSL. Nếu DSN chưa có sslmode thì bật mặc định.
+        # Railway/Postgres thường cần SSL; nếu URI chưa có sslmode thì thêm sslmode=require.
         if "sslmode=" not in dsn and (dsn.startswith("postgresql://") or dsn.startswith("postgres://")):
             dsn = dsn + ("&" if "?" in dsn else "?") + "sslmode=require"
 
@@ -87,29 +87,29 @@ def ensure_schema():
         _DB_AVAILABLE = True
     except Exception as e:
         _DB_AVAILABLE = False
-        # In ra dạng ASCII an toan (tránh lỗi unicode trong console).
+        # In log dạng ASCII an toàn (tránh lỗi Unicode trên console Windows).
         safe = repr(e).encode("unicode_escape").decode("ascii", errors="ignore")
-        print("[warning] PostgreSQL not available:", safe)
-        # Không ném lỗi để tránh server bị 500 ở mọi request.
+        print("[cảnh báo] PostgreSQL chưa sẵn sàng:", safe)
+        # Không raise để tránh toàn bộ route trả 500 khi DB tạm ngắt.
         return False
     return True
 
 
 @app.before_request
 def _bootstrap():
-    # Nếu PostgreSQL chưa sẵn sàng, sẽ lỗi ở các endpoint cần DB.
+    # Khởi tạo schema một lần; nếu DB lỗi, route dùng DB sẽ báo lỗi khi gọi get_db_connection.
     global _DB_INIT_DONE
     if _DB_INIT_DONE:
         return
     ok = ensure_schema()
     if ok:
         _DB_INIT_DONE = True
-    # Không trả về giá trị (Flask before_request phải trả None).
+    # before_request nên trả None (không redirect tại đây).
     return None
 
 
 def _db_error_response(*, status_code: int = 503):
-    # Trả lỗi rõ ràng tiếng Việt thay vì 500 chung
+    # Trả lỗi rõ ràng (HTML hoặc JSON) thay vì 500 không có ngữ cảnh.
     msg = (
         "Không thể kết nối PostgreSQL. "
         "Vui lòng kiểm tra server PostgreSQL đang chạy và biến môi trường "
@@ -123,7 +123,7 @@ def _db_error_response(*, status_code: int = 503):
             host = u.hostname or ""
             port = u.port or ""
             dbname = u.path.lstrip("/")
-            # An toan: khong hien password.
+            # Ẩn mật khẩu trong preview.
             auth_part = f"{user}:***@" if user else ""
             port_part = f":{port}" if port else ""
             dsn_preview = f"{u.scheme}://{auth_part}{host}{port_part}/{dbname}"
@@ -142,8 +142,11 @@ def _db_error_response(*, status_code: int = 503):
 def handle_runtime_error(e):
     if "PostgreSQL" in str(e):
         return _db_error_response()
-    # fallback
-    return render_template("db_error.html", message="Đã xảy ra lỗi trong hệ thống.", dsn=None), 500
+    return render_template(
+        "db_error.html",
+        message="Đã xảy ra lỗi trong hệ thống.",
+        dsn_preview=None,
+    ), 500
 
 
 @app.errorhandler(psycopg2.OperationalError)
@@ -156,7 +159,7 @@ def login_required(fn):
     def wrapper(*args, **kwargs):
         if "user_id" not in session:
             if request.is_json or request.content_type == "application/json":
-                return jsonify({"error": "Unauthorized. Please login first."}), 401
+                return jsonify({"error": "Chưa đăng nhập. Vui lòng đăng nhập trước."}), 401
             flash("Vui lòng đăng nhập để tiếp tục.", "warning")
             return redirect(url_for("login"))
         return fn(*args, **kwargs)
@@ -191,23 +194,20 @@ def save_prediction_log(*, user_id: int, result: str, probability: float, risk: 
     cur.close()
     conn.close()
 
-# -------- ML loading --------
+# --- Nạp mô hình ML (suy luận: Random Forest; scaler chỉ dùng khi huấn luyện LR/SVM) ---
 RF_MODEL = None
-SCALER = None
 METADATA = {}
 
 
 def _load_ml_artifacts():
-    global RF_MODEL, SCALER, METADATA
+    global RF_MODEL, METADATA
     try:
         if cfg.RF_MODEL_PATH.exists():
             RF_MODEL = joblib.load(str(cfg.RF_MODEL_PATH))
-        if cfg.SCALER_PATH.exists():
-            SCALER = joblib.load(str(cfg.SCALER_PATH))
         if cfg.METADATA_PATH.exists():
             METADATA = json.loads(cfg.METADATA_PATH.read_text(encoding="utf-8"))
     except Exception as e:
-        print("[warning] Failed to load ML artifacts:", e)
+        print("[cảnh báo] Không tải được file mô hình:", e)
 
 
 _load_ml_artifacts()
@@ -226,7 +226,7 @@ def parse_float(value):
 
 def validate_features(input_dict):
     if not isinstance(input_dict, dict):
-        return None, ["Invalid input: expected a JSON object or form fields."]
+        return None, ["Dữ liệu không hợp lệ: cần là object JSON hoặc các trường form."]
 
     errors = []
     features = {}
@@ -235,12 +235,12 @@ def validate_features(input_dict):
         raw = input_dict.get(key)
         val = parse_float(raw)
         if val is None:
-            errors.append(f"{key} is required and must be a number.")
+            errors.append(f"{key}: bắt buộc và phải là số.")
             continue
 
         lo, hi = cfg.RANGES[key]
         if val < lo or val > hi:
-            errors.append(f"{key} must be between {lo} and {hi}.")
+            errors.append(f"{key}: giá trị phải nằm trong khoảng {lo} đến {hi}.")
             continue
 
         features[key] = val
@@ -255,7 +255,9 @@ def validate_features(input_dict):
 
 def predict_proba(features: dict):
     if RF_MODEL is None:
-        raise RuntimeError("Model not loaded. Run `python train_model.py` first.")
+        raise RuntimeError(
+            "Chưa tải được mô hình. Chạy `python train_model.py` để huấn luyện và tạo file trong thư mục models."
+        )
 
     x = pd.DataFrame(
         [np.array([features[f] for f in cfg.FEATURES], dtype=float)],
@@ -557,7 +559,7 @@ def clear_history():
     return redirect(url_for("history"))
 
 
-# -------- Pages --------
+# --- Trang giao diện ---
 @app.route("/", methods=["GET"])
 @login_required
 def index():
@@ -580,7 +582,7 @@ def predict():
 
     if is_json and payload is None:
         return (
-            jsonify({"error": "Invalid JSON body. Expected JSON object."}),
+            jsonify({"error": "JSON không hợp lệ. Cần là một object JSON."}),
             400,
         )
 
@@ -588,7 +590,7 @@ def predict():
         features, errors = validate_features(payload)
         if errors:
             if is_json:
-                return jsonify({"error": "Validation failed", "details": errors}), 400
+                return jsonify({"error": "Dữ liệu không hợp lệ", "details": errors}), 400
             return render_template("result.html", error=errors)
 
         prob = predict_proba(features)
@@ -650,8 +652,8 @@ def predict():
         )
     except Exception as e:
         if is_json:
-            return jsonify({"error": "Server error", "details": str(e)}), 500
-        return render_template("result.html", error=[f"Prediction failed: {e}"])
+            return jsonify({"error": "Lỗi máy chủ", "details": str(e)}), 500
+        return render_template("result.html", error=[f"Dự đoán thất bại: {e}"])
 
 
 if __name__ == "__main__":

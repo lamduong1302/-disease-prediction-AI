@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 import joblib
@@ -18,6 +19,12 @@ from sklearn.svm import SVC
 
 from config import cfg
 
+# Trên Windows, console mặc định có thể không phải UTF-8 — tránh lỗi khi in tiếng Việt.
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 DATA_URL = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
 
@@ -26,6 +33,7 @@ def load_dataset():
     cols = list(cfg.FEATURES) + ["Outcome"]
     df = pd.read_csv(DATA_URL, header=None, names=cols)
 
+    # Các cột này dùng 0 làm giá trị thiếu trong dataset gốc — chuyển 0 thành NaN rồi điền median.
     zero_as_missing = ["Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
     df[zero_as_missing] = df[zero_as_missing].replace(0, np.nan)
 
@@ -56,7 +64,7 @@ def main():
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    # Logistic Regression branch
+    # Nhánh Logistic Regression (dữ liệu đã chuẩn hóa)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
@@ -68,7 +76,7 @@ def main():
 
     lr_metrics = evaluate_binary(y_test, lr_pred, lr_proba)
 
-    # Random Forest branch
+    # Random Forest — mô hình chính khi suy luận (không bắt buộc scale)
     rf = RandomForestClassifier(
         n_estimators=250,
         random_state=42,
@@ -81,7 +89,7 @@ def main():
 
     rf_metrics = evaluate_binary(y_test, rf_pred, rf_proba)
 
-    # SVM branch (comparison model)
+    # SVM — mô hình so sánh (dùng dữ liệu đã scale)
     svm = SVC(C=1.0, kernel="rbf", gamma="scale", probability=True, random_state=42)
     svm.fit(X_train_scaled, y_train)
     svm_pred = svm.predict(X_test_scaled)
@@ -89,7 +97,7 @@ def main():
 
     svm_metrics = evaluate_binary(y_test, svm_pred, svm_proba)
 
-    # Save all 3 models, but Random Forest is the main model for inference.
+    # Lưu cả 3 mô hình; suy luận trên web dùng Random Forest + scaler (LR/SVM chỉ để so sánh offline).
     joblib.dump(rf, str(cfg.RF_MODEL_PATH))
     joblib.dump(lr, str(cfg.LR_MODEL_PATH))
     joblib.dump(svm, str(cfg.SVM_MODEL_PATH))
@@ -116,9 +124,9 @@ def main():
         json.dumps(meta, indent=2), encoding="utf-8"
     )
 
-    print("Training done.")
-    print("Main model: random_forest")
-    print("Saved:")
+    print("Huấn luyện xong.")
+    print("Mô hình chính: random_forest")
+    print("Đã lưu:")
     print("- models/random_forest.pkl")
     print("- models/logistic_regression.pkl")
     print("- models/svm.pkl")
@@ -128,4 +136,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

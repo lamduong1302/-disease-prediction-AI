@@ -1,17 +1,17 @@
 {% extends "base.html" %}
-{% block title %}Result - Disease Prediction{% endblock %}
+{% block title %}Kết quả — Hệ thống dự đoán bệnh{% endblock %}
 
 {% block content %}
   {% if error %}
     <div class="alert alert-danger">
-      <h4 class="alert-heading">Prediction failed</h4>
+      <h4 class="alert-heading">Dự đoán thất bại</h4>
       <ul class="mb-0">
         {% for e in error %}
           <li>{{ e }}</li>
         {% endfor %}
       </ul>
     </div>
-    <a class="btn btn-primary" href="{{ url_for('index') }}">Back</a>
+    <a class="btn btn-primary" href="{{ url_for('index') }}">Quay lại</a>
   {% else %}
   <div class="card shadow-sm app-card mb-4">
     <div class="card-body">

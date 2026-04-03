@@ -2,21 +2,20 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-# Load .env cho local nếu package dotenv có sẵn.
-# Trên Railway không cần dotenv vì dùng Environment Variables.
 try:
-    from dotenv import load_dotenv  # type: ignore
+    from dotenv import load_dotenv
 
     load_dotenv()
 except Exception:
     pass
 
+
 @dataclass(frozen=True)
 class Config:
-    # Flask
+    # Flask — khóa phiên (đổi trên production)
     SECRET_KEY: str = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 
-    # PostgreSQL - ưu tiên POSTGRES_DSN, fallback cho Railway env names.
+    # Chuỗi kết nối PostgreSQL (ưu tiên: POSTGRES_DSN → DATABASE_URL → RAILWAY_DATABASE_URL)
     POSTGRES_DSN: str = (
         os.environ.get("POSTGRES_DSN")
         or os.environ.get("DATABASE_URL")
@@ -24,7 +23,7 @@ class Config:
         or ""
     ).strip()
 
-    # Model artifacts
+    # Thư mục chứa mô hình đã huấn luyện
     MODEL_DIR: Path = Path(os.environ.get("MODEL_DIR", "models"))
     RF_MODEL_PATH: Path = MODEL_DIR / "random_forest.pkl"
     LR_MODEL_PATH: Path = MODEL_DIR / "logistic_regression.pkl"
@@ -32,7 +31,7 @@ class Config:
     SCALER_PATH: Path = MODEL_DIR / "scaler.pkl"
     METADATA_PATH: Path = MODEL_DIR / "metadata.json"
 
-    # Pima dataset features (must match train_model.py exactly)
+    # Tên cột đặc trưng (phải khớp train_model.py)
     FEATURES = (
         "Pregnancies",
         "Glucose",
@@ -44,11 +43,10 @@ class Config:
         "Age",
     )
 
-    # Risk thresholds based on probability percentage
-    # <30 Low, 30-60 Medium, >60 High
+    # Ngưỡng rủi ro theo % xác suất: <30 thấp, 30–60 trung bình, >60 cao
     RISK_THRESHOLDS = (30.0, 60.0)
 
-    # Input validation ranges for demo
+    # Giới hạn nhập liệu cho form demo
     RANGES = {
         "Pregnancies": (0, 20),
         "Glucose": (0, 300),
@@ -59,5 +57,6 @@ class Config:
         "DiabetesPedigreeFunction": (0, 5),
         "Age": (0, 120),
     }
+
 
 cfg = Config()

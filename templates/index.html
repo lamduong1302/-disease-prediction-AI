@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Predict - Disease Prediction{% endblock %}
+{% block title %}Dự đoán — Hệ thống dự đoán bệnh{% endblock %}
 
 {% block content %}
   <div class="hero-card mb-4">
@@ -30,7 +30,7 @@
           <form id="predictForm" method="post" action="{{ url_for('predict') }}">
             <div class="mb-3">
               <label class="form-label d-flex align-items-center gap-2">
-                Pregnancies <span class="text-muted fw-normal"/span>
+                Pregnancies <span class="text-muted fw-normal"></span>
                 <span
                   class="info-icon"
                   data-bs-toggle="tooltip"
