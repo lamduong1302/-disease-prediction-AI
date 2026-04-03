@@ -50,4 +50,7 @@ class Config:
         "Age": (0, 120),
     }
 
+# Không gọi ngay, để cho khi có request mới gọi
+_DB_INIT_DONE = False
+
 cfg = Config()
